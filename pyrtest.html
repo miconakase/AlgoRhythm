@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #0f1115; }
+  #c { width: 800px; height: 800px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+import * as THREE from './node_modules/three/build/three.module.js';
+import { applyPyraminxMoves, TETRA_VERTICES } from './resources/js/lib/pyraminxState.js';
+
+const diag = (text) => {
+    let d = document.getElementById('diag');
+    if (!d) { d = document.createElement('div'); d.id = 'diag'; document.body.appendChild(d); }
+    d.textContent = text;
+};
+window.addEventListener('error', (e) => { diag('ERR ' + (e.message || e.type)); });
+window.addEventListener('unhandledrejection', (e) => { diag('REJ ' + (e.reason && e.reason.message)); });
+
+const TETRA_SCALE = 1.2;
+const TETRA_STICKER_FILL = 1;
+const TETRA_VIEW = [3.8, 2.9, 3.8];
+
+const v3add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const v3sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const v3mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const v3dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const v3cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const matVec3 = (m, v) => [m[0][0]*v[0]+m[0][1]*v[1]+m[0][2]*v[2], m[1][0]*v[0]+m[1][1]*v[1]+m[1][2]*v[2], m[2][0]*v[0]+m[2][1]*v[1]+m[2][2]*v[2]];
+const hexRgb = (hex) => { const n = parseInt(hex.slice(1), 16); return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; };
+const INNER_RGB = [0.22, 0.24, 0.28];
+const ZERO_V = [0, 0, 0];
+
+const pushTri = (positions, colors, a, b, c, color, outward) => {
+    const n = v3cross(v3sub(b, a), v3sub(c, a));
+    if (v3dot(n, outward) < 0) { const t = a; a = c; c = t; }
+    positions.push(...a, ...b, ...c);
+    colors.push(...color, ...color, ...color);
+};
+const buildSolidGeometry = (positions, colors) => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+    geometry.computeVertexNormals();
+    return geometry;
+};
+const faceIndexOf = (localNormal, exclude) => {
+    let best = -1, bestScore = Infinity;
+    for (let i = 0; i < 4; i++) {
+        if (i === exclude) continue;
+        const score = v3dot(localNormal, TETRA_VERTICES[i]);
+        if (score < bestScore) { bestScore = score; best = i; }
+    }
+    return best;
+};
+const buildTipGeometry = (piece) => {
+    const t = Number(piece.piece.slice(1));
+    const edgePoint = (k) => v3mul(v3sub(TETRA_VERTICES[k], TETRA_VERTICES[t]), TETRA_SCALE / 3);
+    const P = [0, 1, 2, 3].map((k) => (k === t ? null : edgePoint(k)));
+    const positions = [], colors = [];
+    for (const s of piece.stickers) {
+        const f = faceIndexOf(s.normal, t);
+        const others = [0, 1, 2, 3].filter((k) => k !== f && k !== t);
+        const outward = v3mul(TETRA_VERTICES[f], -1 / Math.sqrt(3));
+        pushTri(positions, colors, ZERO_V, P[others[0]], P[others[1]], hexRgb(s.color), outward);
+    }
+    const base = [0, 1, 2, 3].filter((k) => k !== t).map((k) => P[k]);
+    const centroid = v3mul(v3add(v3add(base[0], base[1]), base[2]), 1 / 3);
+    pushTri(positions, colors, base[0], base[1], base[2], INNER_RGB, centroid);
+    return buildSolidGeometry(positions, colors);
+};
+const buildStickerGeometry = (side, thickness) => {
+    const r = side / Math.sqrt(3), h = side / 2, half = thickness / 2;
+    const a = [0, r, 0], b = [-h, -r / 2, 0], c = [h, -r / 2, 0];
+    const tri = (p, z) => [p[0], p[1], z];
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+        ...tri(a, half), ...tri(b, half), ...tri(c, half),
+        ...tri(c, -half), ...tri(b, -half), ...tri(a, -half),
+        ...tri(a, half), ...tri(b, half), ...tri(b, -half), ...tri(a, -half),
+        ...tri(b, half), ...tri(c, half), ...tri(c, -half), ...tri(b, -half),
+        ...tri(c, half), ...tri(a, half), ...tri(a, -half), ...tri(c, -half),
+    ]), 3));
+    geometry.setIndex([0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]);
+    geometry.computeVertexNormals();
+    return geometry;
+};
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(800, 800, false);
+renderer.setClearColor(0x000000, 0);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+camera.position.set(...TETRA_VIEW);
+camera.lookAt(0, 0, 0);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x9096a3, 1.5));
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.7);
+keyLight.position.set(3.5, 5, 2.5);
+scene.add(keyLight);
+const rimLight = new THREE.DirectionalLight(0x8fa3ff, 0.5);
+rimLight.position.set(-3, -1, -2.5);
+scene.add(rimLight);
+const fillLight = new THREE.DirectionalLight(0xffffff, 0.85);
+fillLight.position.set(-0.8, -2.8, -0.8);
+scene.add(fillLight);
+
+const group = new THREE.Group();
+const side = (Math.sqrt(8) / 3) * TETRA_STICKER_FILL * TETRA_SCALE;
+const scale = TETRA_SCALE;
+
+const stickerMaterialFor = (color) =>
+    new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.05, side: THREE.DoubleSide, flatShading: true });
+
+const solidMaterial = new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 0.35, metalness: 0.05, side: THREE.DoubleSide, flatShading: true,
+});
+
+const alignMeshToMatrix = (mesh, m) => {
+    const basis = new THREE.Matrix4().makeBasis(
+        new THREE.Vector3(m[0][0], m[1][0], m[2][0]),
+        new THREE.Vector3(m[0][1], m[1][1], m[2][1]),
+        new THREE.Vector3(m[0][2], m[1][2], m[2][2])
+    );
+    mesh.quaternion.setFromRotationMatrix(basis);
+};
+
+const stickerGeo = buildStickerGeometry(side, side * 0.12);
+applyPyraminxMoves([]).forEach((p) => {
+    if (p.piece[0] === 't') {
+        const mesh = new THREE.Mesh(buildTipGeometry(p), solidMaterial);
+        alignMeshToMatrix(mesh, p.rot);
+        mesh.position.set(p.origin[0] * scale, p.origin[1] * scale, p.origin[2] * scale);
+        group.add(mesh);
+        return;
+    }
+    p.stickers.forEach((s) => {
+        const pos = matVec3(p.rot, s.pos);
+        const nrm = matVec3(p.rot, s.normal);
+        const upp = matVec3(p.rot, s.up);
+        const mesh = new THREE.Mesh(stickerGeo, stickerMaterialFor(s.color));
+        const right = new THREE.Vector3();
+        const normal = new THREE.Vector3();
+        const up = new THREE.Vector3();
+        normal.set(...nrm);
+        up.set(...upp);
+        right.crossVectors(up, normal).normalize();
+        const matrix = new THREE.Matrix4().makeBasis(right, up, normal);
+        mesh.quaternion.setFromRotationMatrix(matrix);
+        mesh.position.set(
+            (pos[0] + p.origin[0] - nrm[0] * side * 0.06) * scale,
+            (pos[1] + p.origin[1] - nrm[1] * side * 0.06) * scale,
+            (pos[2] + p.origin[2] - nrm[2] * side * 0.06) * scale
+        );
+        group.add(mesh);
+    });
+});
+scene.add(group);
+
+renderer.render(scene, camera);
+console.log('rendered');
+(function () {
+    const gl = renderer.getContext();
+    const w = canvas.width, h = canvas.height;
+    const pixels = new Uint8ClampedArray(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    let drawn = 0, dark = 0, minX = w, minY = h, maxX = -1, maxY = -1, sumR = 0, sumG = 0, sumB = 0;
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = (y * w + x) * 4;
+            if (pixels[i + 3] > 10) {
+                drawn++;
+                sumR += pixels[i]; sumG += pixels[i + 1]; sumB += pixels[i + 2];
+                if (pixels[i] < 60 && pixels[i + 1] < 60 && pixels[i + 2] < 60) dark++;
+                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                if (y < minY) minY = y; if (y > maxY) maxY = y;
+            }
+        }
+    }
+    diag('DIAG drawn=' + drawn + ' dark=' + dark + ' bbox=' + minX + ',' + minY + ',' + maxX + ',' + maxY +
+        ' avgRGB=' + Math.round(sumR / drawn) + ',' + Math.round(sumG / drawn) + ',' + Math.round(sumB / drawn));
+})();
+</script>
+</body>
+</html>
