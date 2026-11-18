@@ -10,7 +10,7 @@ const PUZZLES = [
     { label: '2x2x2', n: 2 },
     { label: '3x3x3', n: 3 },
     { label: '4x4x4', n: 4 },
-    // { label: 'Pyraminx' },
+    { label: 'Pyraminx' },
 ];
 
 const formatTime = (centiseconds) => {

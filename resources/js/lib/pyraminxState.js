@@ -1,7 +1,9 @@
+// Ordered so that, seen from outside the F face (U, L, R), U → L → R runs
+// counter-clockwise like a real puzzle: L on the left, R on the right.
 const VERTICES = [
     [1, 1, 1], // U tip
-    [1, -1, -1], // R tip
-    [-1, 1, -1], // L tip
+    [-1, 1, -1], // R tip
+    [1, -1, -1], // L tip
     [-1, -1, 1], // B tip
 ];
 
@@ -9,10 +11,11 @@ export const TETRA_VERTICES = VERTICES;
 
 const TIPS = { U: 0, R: 1, L: 2, B: 3 };
 
+// WCA colour scheme.
 const FACE_COLORS = {
     0: '#ffd500', // D face (opposite U tip) - yellow
-    1: '#ff5800', // L face (opposite R tip) - orange
-    2: '#c41e3a', // R face (opposite L tip) - red
+    1: '#c41e3a', // L face (opposite R tip) - red
+    2: '#0051ba', // R face (opposite L tip) - blue
     3: '#009e60', // F face (opposite B tip) - green
 };
 
@@ -54,9 +57,11 @@ const FACE_SLOTS = (i) => {
         { bary: [4 / 9, 4 / 9, 1 / 9], piece: `e${Math.min(a, b)}-${Math.max(a, b)}` },
         { bary: [1 / 9, 4 / 9, 4 / 9], piece: `e${Math.min(b, c)}-${Math.max(b, c)}` },
         { bary: [4 / 9, 1 / 9, 4 / 9], piece: `e${Math.min(a, c)}-${Math.max(a, c)}` },
-        { bary: [5 / 9, 2 / 9, 2 / 9], piece: `c${i}` },
-        { bary: [2 / 9, 5 / 9, 2 / 9], piece: `c${i}` },
-        { bary: [2 / 9, 2 / 9, 5 / 9], piece: `c${i}` },
+        // Each centre sticker belongs to the axial piece of the corner it
+        // sits next to; that piece shows one sticker on each of its 3 faces.
+        { bary: [5 / 9, 2 / 9, 2 / 9], piece: `c${a}` },
+        { bary: [2 / 9, 5 / 9, 2 / 9], piece: `c${b}` },
+        { bary: [2 / 9, 2 / 9, 5 / 9], piece: `c${c}` },
     ];
 };
 
@@ -125,7 +130,7 @@ export const createPyraminxState = () => {
                 byPiece.set(piece, []);
             }
 
-            byPiece.get(piece).push({ pos, normal, up, color: FACE_COLORS[i] });
+            byPiece.get(piece).push({ pos, normal, up, color: FACE_COLORS[i], face: i });
         }
     }
 
@@ -140,7 +145,7 @@ export const createPyraminxState = () => {
 
             origin = mul(add(VERTICES[a], VERTICES[b]), 0.5);
         } else {
-            origin = faceCentroid(Number(piece.slice(1)));
+            origin = mul(VERTICES[Number(piece.slice(1))], 1 / 3);
         }
 
         return {
@@ -152,6 +157,7 @@ export const createPyraminxState = () => {
                 normal: s.normal,
                 up: s.up,
                 color: s.color,
+                face: s.face,
             })),
         };
     });
@@ -189,5 +195,9 @@ export const getPyraminxFaces = (state) =>
             normal: matVec(p.rot, s.normal),
             up: matVec(p.rot, s.up),
             color: s.color,
+            // Identity of the sticker in the solved puzzle: its piece and the
+            // face (index of the opposite tip) it started on.
+            piece: p.piece,
+            face: s.face,
         }))
     );

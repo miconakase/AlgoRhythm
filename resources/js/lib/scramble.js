@@ -28,36 +28,33 @@ const moveDefs = (size) => {
     return defs;
 };
 
-const PYRAMINX_AXES = ['U', 'R', 'L', 'B'];
-const PYRAMINX_TIPS = ['u', 'r', 'l', 'b'];
+const PYRAMINX_AXES = ['U', 'L', 'R', 'B'];
+const PYRAMINX_LENGTH = 11;
 
+// WCA-style: layer turns first (never the same axis twice in a row), then
+// each tip turned clockwise, counter-clockwise or left alone.
 export const generatePyraminxScramble = () => {
-    const length = 10 + Math.floor(Math.random() * 3);
-    const tipCount = Math.floor(Math.random() * 5);
-    const tipPositions = new Set();
+    const moves = [];
+    const pyraminxMove = (axis, layers, turns) => ({
+        name: (layers === 'tip' ? axis.toLowerCase() : axis) + (turns === 2 ? "'" : ''),
+        axis,
+        layers,
+        turns,
+    });
 
-    while (tipPositions.size < tipCount) {
-        tipPositions.add(Math.floor(Math.random() * length));
+    while (moves.length < PYRAMINX_LENGTH) {
+        const options = PYRAMINX_AXES.filter((a) => a !== moves[moves.length - 1]?.axis);
+        const axis = options[Math.floor(Math.random() * options.length)];
+
+        moves.push(pyraminxMove(axis, 'layer', 1 + Math.floor(Math.random() * 2)));
     }
 
-    const moves = [];
-    const pick = (options, i) => {
-        const available = options.filter((a) => a.toUpperCase() !== moves[i - 1]?.axis.toUpperCase());
+    for (const axis of PYRAMINX_AXES) {
+        const turns = Math.floor(Math.random() * 3);
 
-        return available[Math.floor(Math.random() * available.length)];
-    };
-
-    for (let i = 0; i < length; i++) {
-        const axis = pick(tipPositions.has(i) ? PYRAMINX_TIPS : PYRAMINX_AXES, i);
-        const isTip = axis === axis.toLowerCase();
-        const turns = 1 + Math.floor(Math.random() * 2);
-
-        moves.push({
-            name: axis + (turns === 2 ? "'" : ''),
-            axis: axis.toUpperCase(),
-            layers: isTip ? 'tip' : 'layer',
-            turns,
-        });
+        if (turns > 0) {
+            moves.push(pyraminxMove(axis, 'tip', turns));
+        }
     }
 
     return moves;

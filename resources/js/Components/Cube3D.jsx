@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { applyMoves, getCubieColors } from '../lib/cubeState';
-import { applyPyraminxMoves, TETRA_VERTICES } from '../lib/pyraminxState';
+import { applyPyraminxMoves, getPyraminxFaces, TETRA_VERTICES } from '../lib/pyraminxState';
 import { generateScramble } from '../lib/scramble';
 
 const CUBIE_FILL = 0.975;
@@ -11,137 +11,69 @@ const CUBIE_RADIUS_FRACTION = 0.08;
 const CUBE_SCALE = 1.5;
 const DEFAULT_VIEW = [2.3, 1.75, 2.3];
 const TETRA_SCALE = 1.5;
-const TETRA_STICKER_FILL = 1;
-const TETRA_VIEW = [4.6, 3.5, 4.6];
+const TETRA_STICKER_FILL = 0.86;
+const TETRA_STICKER_LIFT = 0.012;
+const TETRA_BODY_COLOR = '#16161b';
+const TETRA_VIEW = [5.6, 2.9, 5.6];
+const TETRA_LOGO_PIECE = 'c0';
+const TETRA_LOGO_FACE = 3;
+// Decal size relative to its sticker; the logo art fills ~70% of the image.
+const TETRA_LOGO_SIZE = 0.6;
 
-const buildStickerGeometry = (side, thickness) => {
+// Upright equilateral triangle in the XY plane, centred on its centroid,
+// apex along +Y and front face along +Z.
+const buildTriangleGeometry = (side) => {
     const r = side / Math.sqrt(3);
     const h = side / 2;
-    const half = thickness / 2;
-    const a = [0, r, 0];
-    const b = [-h, -r / 2, 0];
-    const c = [h, -r / 2, 0];
-    const tri = (p, z) => [p[0], p[1], z];
-
     const geometry = new THREE.BufferGeometry();
 
     geometry.setAttribute(
         'position',
-        new THREE.BufferAttribute(
-            new Float32Array([
-                ...tri(a, half), ...tri(b, half), ...tri(c, half),
-                ...tri(c, -half), ...tri(b, -half), ...tri(a, -half),
-                ...tri(a, half), ...tri(b, half), ...tri(b, -half), ...tri(a, -half),
-                ...tri(b, half), ...tri(c, half), ...tri(c, -half), ...tri(b, -half),
-                ...tri(c, half), ...tri(a, half), ...tri(a, -half), ...tri(c, -half),
-            ]),
-            3
-        )
+        new THREE.BufferAttribute(new Float32Array([0, r, 0, -h, -r / 2, 0, h, -r / 2, 0]), 3)
     );
-    geometry.setIndex([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
     geometry.computeVertexNormals();
 
     return geometry;
 };
 
-const v3add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-const v3sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const v3mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
-const v3dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const v3cross = (a, b) => [
-    a[1] * b[2] - a[2] * b[1],
-    a[2] * b[0] - a[0] * b[2],
-    a[0] * b[1] - a[1] * b[0],
-];
-const matVec3 = (m, v) => [
-    m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
-    m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-    m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
-];
-const hexRgb = (hex) => {
-    const n = parseInt(hex.slice(1), 16);
+const buildTetraGeometry = (scale) => {
+    const v = TETRA_VERTICES.map((p) => new THREE.Vector3(...p).multiplyScalar(scale));
+    const positions = [];
 
-    return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-};
-const INNER_RGB = [0.22, 0.24, 0.28];
-const ZERO_V = [0, 0, 0];
+    for (let i = 0; i < 4; i++) {
+        let [a, b, c] = [0, 1, 2, 3].filter((k) => k !== i).map((k) => v[k]);
+        const normal = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a));
 
-const pushTri = (positions, colors, a, b, c, color, outward) => {
-    const n = v3cross(v3sub(b, a), v3sub(c, a));
+        // Wind each face away from the vertex opposite it so it faces outward.
+        if (normal.dot(v[i]) > 0) {
+            [b, c] = [c, b];
+        }
 
-    if (v3dot(n, outward) < 0) {
-        const tmp = a;
-
-        a = c;
-        c = tmp;
+        positions.push(...a.toArray(), ...b.toArray(), ...c.toArray());
     }
 
-    positions.push(...a, ...b, ...c);
-    colors.push(...color, ...color, ...color);
-};
-
-const buildSolidGeometry = (positions, colors) => {
     const geometry = new THREE.BufferGeometry();
 
     geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
     geometry.computeVertexNormals();
 
     return geometry;
 };
 
-const faceIndexOf = (localNormal, exclude) => {
-    let best = -1;
-    let bestScore = Infinity;
+// Turns the model into WCA scrambling orientation: U tip up, green F face
+// (opposite the B tip) towards the viewer, yellow D face underneath.
+const TETRA_ORIENTATION = (() => {
+    const up = new THREE.Vector3(...TETRA_VERTICES[0]).normalize();
+    const front = new THREE.Vector3(...TETRA_VERTICES[3]).negate().normalize();
 
-    for (let i = 0; i < 4; i++) {
-        if (i === exclude) {
-            continue;
-        }
+    front.addScaledVector(up, -front.dot(up)).normalize();
 
-        const score = v3dot(localNormal, TETRA_VERTICES[i]);
+    const right = new THREE.Vector3().crossVectors(up, front);
 
-        if (score < bestScore) {
-            bestScore = score;
-            best = i;
-        }
-    }
-
-    return best;
-};
-
-const buildTipGeometry = (piece) => {
-    const t = Number(piece.piece.slice(1));
-    const edgePoint = (k) => v3mul(v3sub(TETRA_VERTICES[k], TETRA_VERTICES[t]), TETRA_SCALE / 3);
-    const P = [0, 1, 2, 3].map((k) => (k === t ? null : edgePoint(k)));
-    const positions = [];
-    const colors = [];
-
-    for (const s of piece.stickers) {
-        const f = faceIndexOf(s.normal, t);
-        const others = [0, 1, 2, 3].filter((k) => k !== f && k !== t);
-        const outward = v3mul(TETRA_VERTICES[f], -1 / Math.sqrt(3));
-
-        pushTri(positions, colors, ZERO_V, P[others[0]], P[others[1]], hexRgb(s.color), outward);
-    }
-
-    const base = [0, 1, 2, 3].filter((k) => k !== t).map((k) => P[k]);
-    const centroid = v3mul(v3add(v3add(base[0], base[1]), base[2]), 1 / 3);
-
-    pushTri(positions, colors, base[0], base[1], base[2], INNER_RGB, centroid);
-
-    return buildSolidGeometry(positions, colors);
-};
-
-const alignMeshToMatrix = (mesh, m) => {
-    const basis = new THREE.Matrix4().makeBasis(
-        new THREE.Vector3(m[0][0], m[1][0], m[2][0]),
-        new THREE.Vector3(m[0][1], m[1][1], m[2][1]),
-        new THREE.Vector3(m[0][2], m[1][2], m[2][2])
+    return new THREE.Quaternion().setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(right, up, front).transpose()
     );
-
-    mesh.quaternion.setFromRotationMatrix(basis);
-};
+})();
 
 export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef, placement = 'right', canvasClass, brightness, auto = false }) {
     const engineRef = useRef(null);
@@ -254,7 +186,7 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
             renderer,
             cubeGroup,
             geometry: null,
-            // Per-build geometries (logo plane, pyraminx tips) freed on every rebuild.
+            // Per-build geometries (logo plane, pyraminx body) freed on every rebuild.
             buildGeometries: [],
             materials: new Map(),
             cubies: new Map(),
@@ -268,7 +200,6 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
             renderer.domElement.removeEventListener('dblclick', onDblClick);
             controls.dispose();
             engineRef.current.materials.forEach((material) => material.dispose());
-            engineRef.current.solidMaterial?.dispose();
             engineRef.current.logoTexture?.dispose();
 
             if (engineRef.current.geometry) {
@@ -324,87 +255,117 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
             return engine.materials.get(color);
         };
 
+        // The AlgoRhythm logo (AlgoRhythm_Transparent.png) is rendered as a
+        // transparent decal on top of a sticker, with its alpha boosted in a
+        // small shader so the asset's translucent ink stays visible. Texture
+        // and material are built once per engine and reused across scrambles,
+        // and kept in engine.materials so cleanup disposes them.
+        const logoMaterial = () => {
+            if (!engine.logoTexture) {
+                engine.logoTexture = new THREE.TextureLoader().load('/AlgoRhythm_Transparent.png');
+                engine.logoTexture.colorSpace = THREE.SRGBColorSpace;
+            }
+
+            const decalMaterial = engine.materials.get('logo') ?? new THREE.ShaderMaterial({
+                uniforms: { uTex: { value: engine.logoTexture } },
+                vertexShader: `
+                    varying vec2 vUv;
+
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform sampler2D uTex;
+                    varying vec2 vUv;
+
+                    vec3 srgbToLinear(vec3 c) {
+                        return c * c * (vec3(0.305306011) + c * (vec3(0.682171111) + c * vec3(0.012522878)));
+                    }
+
+                    vec3 acesTonemap(vec3 x) {
+                        return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+                    }
+
+                    vec3 linearToSrgb(vec3 c) {
+                        return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
+                    }
+
+                    void main() {
+                        vec4 c = texture2D(uTex, vUv);
+                        c.rgb = srgbToLinear(c.rgb);
+                        c.rgb = acesTonemap(c.rgb * 1.15);
+                        gl_FragColor = vec4(linearToSrgb(c.rgb), clamp(c.a * 1.6, 0.0, 1.0));
+                    }
+                `,
+                transparent: true,
+                alphaTest: 0.05,
+                depthWrite: false,
+            });
+
+            engine.materials.set('logo', decalMaterial);
+
+            return decalMaterial;
+        };
+
         if (kind === 'pyraminx') {
-            const scale = TETRA_SCALE;
-            const side = (Math.sqrt(8) / 3) * TETRA_STICKER_FILL * TETRA_SCALE;
-
-            engine.geometry = buildStickerGeometry(side, side * 0.12);
-
-            const stickerMaterialFor = (color) => {
-                const key = `pyr:${color}`;
-
-                if (!engine.materials.has(key)) {
-                    engine.materials.set(
-                        key,
-                        new THREE.MeshStandardMaterial({
-                            color,
-                            roughness: 0.35,
-                            metalness: 0.05,
-                            side: THREE.DoubleSide,
-                            flatShading: true,
-                        })
-                    );
-                }
-
-                return engine.materials.get(key);
-            };
-
+            const side = (Math.sqrt(8) / 3) * TETRA_SCALE;
+            const body = buildTetraGeometry(TETRA_SCALE);
             const matrix = new THREE.Matrix4();
-            const quaternion = new THREE.Quaternion();
             const right = new THREE.Vector3();
             const normal = new THREE.Vector3();
             const up = new THREE.Vector3();
 
-            if (!engine.solidMaterial) {
-                engine.solidMaterial = new THREE.MeshStandardMaterial({
-                    vertexColors: true,
-                    roughness: 0.35,
-                    metalness: 0.05,
-                    side: THREE.DoubleSide,
-                    flatShading: true,
-                });
-            }
+            engine.geometry = buildTriangleGeometry(side * TETRA_STICKER_FILL);
+            engine.buildGeometries.push(body);
+            engine.cubeGroup.quaternion.copy(TETRA_ORIENTATION);
+            engine.cubeGroup.add(new THREE.Mesh(body, materialFor(TETRA_BODY_COLOR)));
 
-            applyPyraminxMoves(moves).forEach((p) => {
-                if (p.piece[0] === 't') {
-                    const tipGeometry = buildTipGeometry(p);
-                    const mesh = new THREE.Mesh(tipGeometry, engine.solidMaterial);
+            // The logo rides the U axial piece's sticker that starts on the
+            // green F face. Axial pieces only spin in place, so the logo always
+            // stays beside the U tip, like the cube's logo on its fixed centre.
+            // Centre stickers point away from U (▼), so the decal is turned to
+            // point at U and nudged towards the sticker's wide edge to fit.
+            const addTetraLogo = (stickerPos, stickerNormal, stickerUp) => {
+                const stickerSide = side * TETRA_STICKER_FILL;
+                const logoGeometry = new THREE.PlaneGeometry(
+                    stickerSide * TETRA_LOGO_SIZE,
+                    stickerSide * TETRA_LOGO_SIZE
+                );
+                const logo = new THREE.Mesh(logoGeometry, logoMaterial());
+                const logoUp = stickerUp.clone().negate();
+                const logoRight = new THREE.Vector3().crossVectors(logoUp, stickerNormal);
 
-                    engine.buildGeometries.push(tipGeometry);
+                engine.buildGeometries.push(logoGeometry);
+                logo.quaternion.setFromRotationMatrix(
+                    new THREE.Matrix4().makeBasis(logoRight, logoUp, stickerNormal)
+                );
+                logo.position
+                    .copy(stickerPos)
+                    .addScaledVector(stickerNormal, 0.004)
+                    .addScaledVector(logoUp, stickerSide * 0.04);
+                engine.cubeGroup.add(logo);
+            };
 
-                    alignMeshToMatrix(mesh, p.rot);
-                    mesh.position.set(
-                        p.origin[0] * scale,
-                        p.origin[1] * scale,
-                        p.origin[2] * scale
-                    );
-                    engine.cubeGroup.add(mesh);
+            // One flat sticker per facelet, lifted just off the dark body.
+            getPyraminxFaces(applyPyraminxMoves(moves)).forEach((s) => {
+                const mesh = new THREE.Mesh(engine.geometry, materialFor(s.color));
 
-                    return;
+                normal.set(...s.normal);
+                up.set(...s.up);
+                right.crossVectors(up, normal).normalize();
+                matrix.makeBasis(right, up, normal);
+                mesh.quaternion.setFromRotationMatrix(matrix);
+                mesh.position
+                    .set(...s.pos)
+                    .multiplyScalar(TETRA_SCALE)
+                    .addScaledVector(normal, TETRA_STICKER_LIFT);
+                engine.cubeGroup.add(mesh);
+
+                if (s.piece === TETRA_LOGO_PIECE && s.face === TETRA_LOGO_FACE) {
+                    addTetraLogo(mesh.position, normal, up);
                 }
-
-                p.stickers.forEach((s) => {
-                    const pos = matVec3(p.rot, s.pos);
-                    const nrm = matVec3(p.rot, s.normal);
-                    const upp = matVec3(p.rot, s.up);
-                    const mesh = new THREE.Mesh(engine.geometry, stickerMaterialFor(s.color));
-
-                    normal.set(...nrm);
-                    up.set(...upp);
-                    right.crossVectors(up, normal).normalize();
-                    matrix.makeBasis(right, up, normal);
-                    quaternion.setFromRotationMatrix(matrix);
-                    mesh.quaternion.copy(quaternion);
-                    // Sink the plate by half its thickness so its front face is
-                    // coplanar with the face plane (flush with the solid tip
-                    // wedges) instead of leaving a raised seam between pieces.
-                    mesh.position.set(
-                        (pos[0] + p.origin[0] - nrm[0] * side * 0.06) * scale,
-                        (pos[1] + p.origin[1] - nrm[1] * side * 0.06) * scale,
-                        (pos[2] + p.origin[2] - nrm[2] * side * 0.06) * scale
-                    );
-                    engine.cubeGroup.add(mesh);
-                });
             });
 
             return;
@@ -483,58 +444,7 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
             });
         }
 
-        // White sticker with the source logo (AlgoRhythm_Transparent.png) printed on
-        // it. The sticker's surface stays plain white; the logo is
-        // rendered as a transparent decal on top of it with its alpha boosted
-        // in a small shader, so the asset's translucent ink remains visible on
-        // the white piece. The image loads through TextureLoader like any
-        // ordinary asset — no canvas compositing involved. Texture and material
-        // are built once per engine and reused across scrambles.
-        if (!engine.logoTexture) {
-            engine.logoTexture = new THREE.TextureLoader().load('/AlgoRhythm_Transparent.png');
-            engine.logoTexture.colorSpace = THREE.SRGBColorSpace;
-        }
-
-        const decalMaterial = engine.materials.get('logo') ?? new THREE.ShaderMaterial({
-            uniforms: { uTex: { value: engine.logoTexture } },
-            vertexShader: `
-                varying vec2 vUv;
-
-                void main() {
-                    vUv = uv;
-                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                }
-            `,
-            fragmentShader: `
-                uniform sampler2D uTex;
-                varying vec2 vUv;
-
-                vec3 srgbToLinear(vec3 c) {
-                    return c * c * (vec3(0.305306011) + c * (vec3(0.682171111) + c * vec3(0.012522878)));
-                }
-
-                vec3 acesTonemap(vec3 x) {
-                    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
-                }
-
-                vec3 linearToSrgb(vec3 c) {
-                    return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
-                }
-
-                void main() {
-                    vec4 c = texture2D(uTex, vUv);
-                    c.rgb = srgbToLinear(c.rgb);
-                    c.rgb = acesTonemap(c.rgb * 1.15);
-                    gl_FragColor = vec4(linearToSrgb(c.rgb), clamp(c.a * 1.6, 0.0, 1.0));
-                }
-            `,
-            transparent: true,
-            alphaTest: 0.05,
-            depthWrite: false,
-        });
-
-        // Store in engine.materials so it's disposed automatically on cleanup
-        engine.materials.set('logo', decalMaterial);
+        const decalMaterial = logoMaterial();
         // ───────────────────────────────────────────────────────────────────
 
         getCubieColors(size, state).forEach((faces, position) => {
