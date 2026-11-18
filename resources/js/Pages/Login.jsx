@@ -2,6 +2,8 @@ import { router } from '@inertiajs/react';
 import { useEffect, useRef, useState } from 'react';
 import Cube3D from '../Components/Cube3D';
 
+const NO_MOVES = [];
+
 export default function Login({ googleClientId }) {
     const buttonRef = useRef(null);
     const cubeAnchorRef = useRef(null);
@@ -111,13 +113,14 @@ export default function Login({ googleClientId }) {
                             )}
 
                             <div className="mt-8 flex flex-col items-center gap-4">
-                                {submitting ? (
+                                {submitting && (
                                     <div className="flex h-11 items-center text-sm text-white/40">
                                         Signing in…
                                     </div>
-                                ) : (
-                                    <div ref={buttonRef} />
                                 )}
+                                {/* Kept mounted while submitting: Google renders its button into
+                                    this node once, so a remount would leave it empty after an error. */}
+                                <div ref={buttonRef} className={submitting ? 'hidden' : undefined} />
                             </div>
 
                             <div className="mt-6 flex items-center gap-4">
@@ -149,7 +152,7 @@ export default function Login({ googleClientId }) {
                 auto
                 placement="center"
                 size={3}
-                moves={[]}
+                moves={NO_MOVES}
                 brightness={1.5}
                 canvasClass="fixed z-10 block aspect-square w-72 opacity-100 transition duration-300 sm:w-[30rem] lg:w-[38rem]"
                 anchorRef={cubeAnchorRef}

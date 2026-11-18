@@ -194,8 +194,11 @@ export default function Timer() {
     }, [clearHoldTimer]);
 
     const stop = useCallback(() => {
+        const end = performance.now();
+
         clearHoldTimer();
         phaseRef.current = 'stopped';
+        setElapsed(Math.floor((end - startRef.current) / 10));
         setRunning(false);
         setHolding(false);
         setArmed(false);
@@ -241,7 +244,11 @@ export default function Timer() {
         let frame;
 
         const tick = () => {
-            const centiseconds = Math.round((performance.now() - startRef.current) / 10);
+            if (phaseRef.current !== 'running') {
+                return;
+            }
+
+            const centiseconds = Math.floor((performance.now() - startRef.current) / 10);
             setElapsed(centiseconds);
             frame = requestAnimationFrame(tick);
         };
@@ -281,6 +288,30 @@ export default function Timer() {
 
     useEffect(() => () => clearHoldTimer(), [clearHoldTimer]);
 
+    // Pointer events cover mouse, touch and pen in one stream, so a touch no
+    // longer fires a second, emulated mousedown that would stop the timer the
+    // moment it starts. Capturing the pointer keeps the release on this element
+    // even when it happens outside the digits.
+    const onPointerDown = (event) => {
+        if (event.button !== 0) {
+            return;
+        }
+
+        event.currentTarget.setPointerCapture(event.pointerId);
+        press();
+    };
+
+    const onPointerCancel = () => {
+        if (phaseRef.current !== 'holding') {
+            return;
+        }
+
+        clearHoldTimer();
+        phaseRef.current = 'stopped';
+        setHolding(false);
+        setArmed(false);
+    };
+
     return (
         <>
             <Head title="Timer" />
@@ -315,13 +346,13 @@ export default function Timer() {
                 <div className="flex flex-1 items-center justify-center">
                     <div
                         ref={timerRef}
-                        className={`mb-96 font-mono text-[6rem] font-light tabular-nums leading-none sm:text-[8rem] lg:text-[10rem] ${
+                        className={`mb-96 touch-none font-mono text-[6rem] font-light tabular-nums leading-none sm:text-[8rem] lg:text-[10rem] ${
                             running || armed ? 'text-green-500' : 'text-white'
                         }`}
-                        onMouseDown={press}
-                        onMouseUp={release}
-                        onTouchStart={press}
-                        onTouchEnd={release}
+                        onPointerDown={onPointerDown}
+                        onPointerUp={release}
+                        onPointerCancel={onPointerCancel}
+                        onContextMenu={(event) => event.preventDefault()}
                     >
                         {formatTime(elapsed)}
                     </div>

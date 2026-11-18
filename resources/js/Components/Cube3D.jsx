@@ -254,6 +254,8 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
             renderer,
             cubeGroup,
             geometry: null,
+            // Per-build geometries (logo plane, pyraminx tips) freed on every rebuild.
+            buildGeometries: [],
             materials: new Map(),
             cubies: new Map(),
         };
@@ -266,10 +268,14 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
             renderer.domElement.removeEventListener('dblclick', onDblClick);
             controls.dispose();
             engineRef.current.materials.forEach((material) => material.dispose());
+            engineRef.current.solidMaterial?.dispose();
+            engineRef.current.logoTexture?.dispose();
 
             if (engineRef.current.geometry) {
                 engineRef.current.geometry.dispose();
             }
+
+            engineRef.current.buildGeometries.forEach((geometry) => geometry.dispose());
 
             renderer.dispose();
             canvas.remove();
@@ -303,8 +309,9 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
             engine.geometry.dispose();
         }
 
+        engine.buildGeometries.forEach((geometry) => geometry.dispose());
+        engine.buildGeometries = [];
         engine.cubies = new Map();
-
 
         const materialFor = (color) => {
             if (!engine.materials.has(color)) {
@@ -360,7 +367,10 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
 
             applyPyraminxMoves(moves).forEach((p) => {
                 if (p.piece[0] === 't') {
-                    const mesh = new THREE.Mesh(buildTipGeometry(p), engine.solidMaterial);
+                    const tipGeometry = buildTipGeometry(p);
+                    const mesh = new THREE.Mesh(tipGeometry, engine.solidMaterial);
+
+                    engine.buildGeometries.push(tipGeometry);
 
                     alignMeshToMatrix(mesh, p.rot);
                     mesh.position.set(
@@ -478,13 +488,15 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
         // rendered as a transparent decal on top of it with its alpha boosted
         // in a small shader, so the asset's translucent ink remains visible on
         // the white piece. The image loads through TextureLoader like any
-        // ordinary asset — no canvas compositing involved.
-        const logoTex = new THREE.TextureLoader().load('/AlgoRhythm_Transparent.png');
+        // ordinary asset — no canvas compositing involved. Texture and material
+        // are built once per engine and reused across scrambles.
+        if (!engine.logoTexture) {
+            engine.logoTexture = new THREE.TextureLoader().load('/AlgoRhythm_Transparent.png');
+            engine.logoTexture.colorSpace = THREE.SRGBColorSpace;
+        }
 
-        logoTex.colorSpace = THREE.SRGBColorSpace;
-
-        const decalMaterial = new THREE.ShaderMaterial({
-            uniforms: { uTex: { value: logoTex } },
+        const decalMaterial = engine.materials.get('logo') ?? new THREE.ShaderMaterial({
+            uniforms: { uTex: { value: engine.logoTexture } },
             vertexShader: `
                 varying vec2 vUv;
 
@@ -546,10 +558,10 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
             const matrix = new THREE.Matrix4();
             const quaternion = new THREE.Quaternion();
 
-            const logoDecal = new THREE.Mesh(
-                new THREE.PlaneGeometry(cubieSize, cubieSize),
-                decalMaterial
-            );
+            const logoGeometry = new THREE.PlaneGeometry(cubieSize, cubieSize);
+            const logoDecal = new THREE.Mesh(logoGeometry, decalMaterial);
+
+            engine.buildGeometries.push(logoGeometry);
 
             right.crossVectors(up, normal).normalize();
             matrix.makeBasis(right, up, normal);
@@ -733,7 +745,8 @@ export default function Cube3D({ kind = 'cube', size, moves, running, anchorRef,
             cancelAnimationFrame(frame);
             engine.controls.removeEventListener('start', onStart);
         };
-    }, [auto, kind]);
+        // Restart on every rebuild so the animation never drives stale cubies.
+    }, [auto, kind, size, moves]);
 
     return null;
 }
