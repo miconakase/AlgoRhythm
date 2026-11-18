@@ -7,8 +7,12 @@ const SCRAMBLE_LENGTHS = { 2: 9, 3: 20, 4: 40 };
 const LAYERS = {
     2: { outer: [1, 0.5] },
     3: { outer: [1.5, 1] },
-    4: { outer: [2, 1.5], wide: [2, 1.5, 1, 0.5], inner: [0.5, -0.5] },
+    4: { outer: [2, 1.5], wide: [2, 1.5, 1, 0.5] },
 };
+
+// WCA-style 4x4 scrambles only widen U, R and F; Dw/Lw/Bw are the same
+// piece permutation as Uw/Rw/Fw plus a whole-cube rotation.
+const WIDE_AXES = ['U', 'R', 'F'];
 
 const moveDefs = (size) => {
     const defs = [];
@@ -16,9 +20,8 @@ const moveDefs = (size) => {
     for (const axis of ['U', 'D', 'L', 'R', 'F', 'B']) {
         defs.push({ name: axis, axis, layers: LAYERS[size].outer });
 
-        if (size === 4) {
+        if (size === 4 && WIDE_AXES.includes(axis)) {
             defs.push({ name: `${axis}w`, axis, layers: LAYERS[size].wide });
-            defs.push({ name: axis.toLowerCase(), axis, layers: LAYERS[size].inner });
         }
     }
 
